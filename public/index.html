@@ -1,0 +1,170 @@
+// 更新HTML文件以包含命令提示JS文件
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>优雅SSH客户端</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
+</head>
+<body>
+    <div class="app-container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h3>SSH客户端</h3>
+            </div>
+            <div class="connection-form">
+                <h4>连接设置</h4>
+                <form id="ssh-form">
+                    <div class="form-group">
+                        <label for="host">主机地址</label>
+                        <input type="text" id="host" class="form-control" placeholder="例如: example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="port">端口</label>
+                        <input type="number" id="port" class="form-control" value="22">
+                    </div>
+                    <div class="form-group">
+                        <label for="username">用户名</label>
+                        <input type="text" id="username" class="form-control" placeholder="例如: root">
+                    </div>
+                    <div class="form-group">
+                        <label for="auth-type">认证方式</label>
+                        <select id="auth-type" class="form-control">
+                            <option value="password">密码</option>
+                            <option value="privateKey">私钥</option>
+                        </select>
+                    </div>
+                    <div class="form-group auth-password">
+                        <label for="password">密码</label>
+                        <input type="password" id="password" class="form-control">
+                    </div>
+                    <div class="form-group auth-key hidden">
+                        <label for="private-key">私钥文件</label>
+                        <input type="file" id="private-key" class="form-control">
+                    </div>
+                    <div class="form-group auth-key hidden">
+                        <label for="passphrase">私钥密码 (可选)</label>
+                        <input type="password" id="passphrase" class="form-control">
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">
+                        <i class="bi bi-box-arrow-in-right"></i> 连接
+                    </button>
+                </form>
+            </div>
+            <div class="saved-connections">
+                <h4>保存的连接</h4>
+                <ul id="connections-list" class="list-group">
+                    <!-- 保存的连接将在这里动态添加 -->
+                </ul>
+            </div>
+        </div>
+        <div class="main-content">
+            <div class="tabs">
+                <ul class="nav nav-tabs" id="main-tabs" role="tablist">
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link active" id="terminal-tab" data-bs-toggle="tab" data-bs-target="#terminal-content" type="button" role="tab" aria-controls="terminal-content" aria-selected="true">
+                            <i class="bi bi-terminal"></i> <span>终端</span>
+                        </button>
+                    </li>
+                    <li class="nav-item" role="presentation">
+                        <button class="nav-link" id="file-tab" data-bs-toggle="tab" data-bs-target="#file-content" type="button" role="tab" aria-controls="file-content" aria-selected="false">
+                            <i class="bi bi-folder"></i> <span>文件管理</span>
+                        </button>
+                    </li>
+                </ul>
+                <div class="tab-content" id="main-tab-content">
+                    <div class="tab-pane fade show active" id="terminal-content" role="tabpanel" aria-labelledby="terminal-tab">
+                        <div class="terminal-container">
+                            <div id="terminal"></div>
+                            <div class="command-suggestions">
+                                <div class="suggestion-header">
+                                    <h5>命令提示</h5>
+                                </div>
+                                <div id="suggestions-container">
+                                    <!-- 命令提示将在这里动态添加 -->
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="tab-pane fade" id="file-content" role="tabpanel" aria-labelledby="file-tab">
+                        <div class="file-manager">
+                            <div class="file-toolbar">
+                                <button id="upload-file" class="btn btn-sm btn-primary">
+                                    <i class="bi bi-upload"></i> 上传
+                                </button>
+                                <button id="create-folder" class="btn btn-sm btn-secondary">
+                                    <i class="bi bi-folder-plus"></i> 新建文件夹
+                                </button>
+                                <button id="refresh-files" class="btn btn-sm btn-info">
+                                    <i class="bi bi-arrow-clockwise"></i> 刷新
+                                </button>
+                                <input type="file" id="file-upload" class="hidden">
+                            </div>
+                            <div class="path-navigator">
+                                <ol class="breadcrumb" id="path-breadcrumb">
+                                    <li class="breadcrumb-item"><a href="#" data-path="/">根目录</a></li>
+                                </ol>
+                            </div>
+                            <div class="file-list-container">
+                                <table class="table table-hover">
+                                    <thead>
+                                        <tr>
+                                            <th>名称</th>
+                                            <th>大小</th>
+                                            <th>修改日期</th>
+                                            <th>权限</th>
+                                            <th>操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="file-list">
+                                        <!-- 文件列表将在这里动态添加 -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="status-bar">
+                <div class="connection-status">
+                    <span id="status-indicator" class="status-indicator status-offline"></span>
+                    <span id="status-text">未连接</span>
+                </div>
+                <div class="connection-info">
+                    <span id="connection-info-text"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模态框 -->
+    <div class="modal fade" id="file-edit-modal" tabindex="-1" aria-labelledby="file-edit-modal-label" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="file-edit-modal-label">编辑文件</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <textarea id="file-editor" class="form-control" rows="20"></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" id="save-file-btn">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="js/main.js"></script>
+    <script src="js/command-suggestions.js"></script>
+</body>
+</html>
