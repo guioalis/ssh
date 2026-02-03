@@ -1,14 +1,21 @@
 {
   "name": "ssh-client",
   "version": "1.0.0",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "ssh",
+    "terminal",
+    "web-client",
+    "remote-access"
+  ],
+  "author": "Meow Assistant",
+  "license": "MIT",
+  "description": "A web-based SSH client with terminal emulation and file management",
   "dependencies": {
     "axios": "^1.8.4",
     "express": "^5.1.0",
@@ -16,6 +23,10 @@
     "socket.io": "^4.8.1",
     "ssh2": "^1.16.0",
     "xterm": "^5.3.0",
-    "xterm-addon-fit": "^0.8.0"
+    "xterm-addon-fit": "^0.8.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   }
 }

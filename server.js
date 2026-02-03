@@ -6,6 +6,7 @@ const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
 const axios = require('axios');
+require('dotenv').config();
 
 // 创建Express应用
 const app = express();
@@ -17,10 +18,123 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 // 设置文件上传
-const upload = multer({ dest: 'uploads/' });
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const uploadDir = process.env.UPLOAD_DIR || './uploads';
+        if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+        }
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        // 生成唯一文件名以避免冲突
+        cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname));
+    }
+});
+
+const upload = multer({ 
+    storage: storage,
+    limits: { 
+        fileSize: parseInt(process.env.MAX_FILE_SIZE) || 10 * 1024 * 1024 // 10MB 默认
+    },
+    fileFilter: (req, file, cb) => {
+        // 定义允许的文件类型
+        const allowedTypes = (process.env.ALLOWED_FILE_TYPES || 'text/plain,text/html,application/javascript,application/json').split(',');
+        if (allowedTypes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('不支持的文件类型'), false);
+        }
+    }
+});
 
 // 存储SSH连接
 const sshConnections = {};
+
+// 验证SSH连接参数的函数
+function validateSSHParams(data) {
+    const errors = [];
+    
+    // 验证主机地址
+    if (!data.host || typeof data.host !== 'string' || data.host.length > 255) {
+        errors.push('无效的主机地址');
+    } else if (!isValidHostnameOrIP(data.host)) {
+        errors.push('主机地址格式不正确');
+    }
+    
+    // 验证端口
+    const port = parseInt(data.port);
+    if (isNaN(port) || port < 1 || port > 65535) {
+        errors.push('端口必须是1-65535之间的数字');
+    }
+    
+    // 验证用户名
+    if (!data.username || typeof data.username !== 'string' || data.username.length > 64) {
+        errors.push('用户名不能为空且长度不能超过64字符');
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(data.username)) {
+        errors.push('用户名只能包含字母、数字、下划线和连字符');
+    }
+    
+    // 验证认证方式
+    if (!['password', 'privateKey'].includes(data.authType)) {
+        errors.push('认证方式必须是password或privateKey');
+    }
+    
+    // 根据认证方式验证相应字段
+    if (data.authType === 'password') {
+        if (!data.password || typeof data.password !== 'string') {
+            errors.push('密码不能为空');
+        }
+    } else if (data.authType === 'privateKey') {
+        if (!data.privateKey) {
+            errors.push('私钥不能为空');
+        }
+        // 如果有密码短语，验证其类型
+        if (data.passphrase && typeof data.passphrase !== 'string') {
+            errors.push('密码短语格式不正确');
+        }
+    }
+    
+    return errors;
+}
+
+// 验证主机名或IP地址
+function isValidHostnameOrIP(hostname) {
+    // IP地址正则
+    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+    // 主机名正则
+    const hostnameRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9](\.[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9])*$/;
+
+    if (ipRegex.test(hostname)) {
+        // 验证IP地址每个段是否在0-255范围内
+        const parts = hostname.split('.');
+        return parts.every(part => {
+            const num = parseInt(part);
+            return num >= 0 && num <= 255;
+        });
+    }
+
+    return hostnameRegex.test(hostname) || hostname === 'localhost';
+}
+
+// 验证文件路径以防止路径遍历攻击
+function validateFilePath(filePath) {
+    if (!filePath || typeof filePath !== 'string') {
+        return false;
+    }
+
+    // 防止路径遍历攻击
+    if (filePath.includes('../') || filePath.includes('..\\')) {
+        return false;
+    }
+
+    // 检查是否包含危险字符
+    if (/[<>'"&]/.test(filePath)) {
+        return false;
+    }
+
+    return true;
+}
 
 // 处理SSH连接
 io.on('connection', (socket) => {
@@ -30,6 +144,12 @@ io.on('connection', (socket) => {
     // 处理SSH连接请求
     socket.on('ssh-connect', async (data) => {
         try {
+            // 首先验证输入参数
+            const validationErrors = validateSSHParams(data);
+            if (validationErrors.length > 0) {
+                return socket.emit('ssh-error', `参数验证失败: ${validationErrors.join(', ')}`);
+            }
+
             // 关闭现有连接
             if (sshClient) {
                 sshClient.end();
@@ -148,6 +268,11 @@ io.on('connection', (socket) => {
             return socket.emit('ssh-error', '未连接到SSH服务器或SFTP不可用');
         }
 
+        // 验证路径
+        if (!validateFilePath(path)) {
+            return socket.emit('ssh-error', '无效的文件路径');
+        }
+
         sshClient.sftp((err, sftp) => {
             if (err) {
                 return socket.emit('ssh-error', `SFTP错误: ${err.message}`);
@@ -167,6 +292,11 @@ io.on('connection', (socket) => {
     socket.on('download-file', (filePath) => {
         if (!sshClient) {
             return socket.emit('ssh-error', '未连接到SSH服务器');
+        }
+
+        // 验证路径
+        if (!validateFilePath(filePath)) {
+            return socket.emit('ssh-error', '无效的文件路径');
         }
 
         sshClient.sftp((err, sftp) => {
@@ -198,7 +328,7 @@ io.on('connection', (socket) => {
     // 处理文件上传请求
     app.post('/upload', upload.single('file'), (req, res) => {
         if (!req.file) {
-            return res.status(400).json({ error: '未提供文件' });
+            return res.status(400).json({ error: '未提供文件或文件过大' });
         }
 
         const socketId = req.body.socketId;
@@ -241,6 +371,11 @@ io.on('connection', (socket) => {
             return socket.emit('ssh-error', '未连接到SSH服务器');
         }
 
+        // 验证路径
+        if (!validateFilePath(filePath)) {
+            return socket.emit('ssh-error', '无效的文件路径');
+        }
+
         sshClient.sftp((err, sftp) => {
             if (err) {
                 return socket.emit('ssh-error', `SFTP错误: ${err.message}`);
@@ -272,6 +407,11 @@ io.on('connection', (socket) => {
             return socket.emit('ssh-error', '未连接到SSH服务器');
         }
 
+        // 验证路径
+        if (!validateFilePath(data.path)) {
+            return socket.emit('ssh-error', '无效的文件路径');
+        }
+
         sshClient.sftp((err, sftp) => {
             if (err) {
                 return socket.emit('ssh-error', `SFTP错误: ${err.message}`);
@@ -300,12 +440,17 @@ io.on('connection', (socket) => {
             return socket.emit('ssh-error', '未连接到SSH服务器');
         }
 
+        // 验证路径
+        if (!validateFilePath(data.path)) {
+            return socket.emit('ssh-error', '无效的文件路径');
+        }
+
         sshClient.sftp((err, sftp) => {
             if (err) {
                 return socket.emit('ssh-error', `SFTP错误: ${err.message}`);
             }
 
-            sftp.mkdir(data.path, (err) => {
+            sftp.mkdir(data.path, { mode: 0o755 }, (err) => {
                 if (err) {
                     return socket.emit('ssh-error', `创建目录错误: ${err.message}`);
                 }
@@ -319,6 +464,11 @@ io.on('connection', (socket) => {
     socket.on('delete-file', (filePath) => {
         if (!sshClient) {
             return socket.emit('ssh-error', '未连接到SSH服务器');
+        }
+
+        // 验证路径
+        if (!validateFilePath(filePath)) {
+            return socket.emit('ssh-error', '无效的文件路径');
         }
 
         sshClient.sftp((err, sftp) => {
@@ -336,9 +486,21 @@ io.on('connection', (socket) => {
         });
     });
 
-    // 处理命令提示请求
+    // 处理命令提示请求（安全版本 - 使用环境变量中的API密钥）
     socket.on('command-suggestion', async (command) => {
         try {
+            // 验证命令输入，防止注入攻击
+            if (!command || typeof command !== 'string' || command.length > 100) {
+                return socket.emit('command-suggestions', '无效的命令输入');
+            }
+
+            // 检查是否配置了API密钥
+            const apiKey = process.env.COMMAND_SUGGESTION_API_KEY;
+            if (!apiKey) {
+                // 如果没有配置API密钥，则返回通用命令提示
+                return socket.emit('command-suggestions', generateLocalCommandSuggestions(command));
+            }
+
             const response = await axios.post('https://api.x.ai/v1/chat/completions', {
                 messages: [
                     {
@@ -356,7 +518,7 @@ io.on('connection', (socket) => {
             }, {
                 headers: {
                     'Content-Type': 'application/json',
-                    'Authorization': 'Bearer xai-C2pYeM9PZ090poP67eoAMYUhh3qhmQ6qfddZM7MrrgoHUodhp21FuqtLeak7ERWjLCSf0ULxSD1sJFdN'
+                    'Authorization': `Bearer ${apiKey}`
                 }
             });
 
@@ -364,9 +526,70 @@ io.on('connection', (socket) => {
             socket.emit('command-suggestions', suggestions);
         } catch (error) {
             console.error('命令提示API错误:', error);
-            socket.emit('command-suggestions', '无法获取命令提示');
+            // 发生错误时返回本地生成的建议
+            socket.emit('command-suggestions', generateLocalCommandSuggestions(command));
         }
     });
+
+    // 本地命令建议生成函数（当API不可用时的备用方案）
+    function generateLocalCommandSuggestions(command) {
+        const suggestions = [];
+        
+        // 基于常见命令的建议
+        if (command.startsWith('ls')) {
+            suggestions.push('ls -la 列出所有文件（包含隐藏文件）');
+            suggestions.push('ls -lh 以人类可读格式显示文件大小');
+        } else if (command.startsWith('cd')) {
+            suggestions.push('cd .. 返回上级目录');
+            suggestions.push('cd ~ 进入主目录');
+            suggestions.push('cd / 进入根目录');
+        } else if (command.startsWith('mkdir')) {
+            suggestions.push('mkdir -p 创建多级目录');
+        } else if (command.startsWith('rm')) {
+            suggestions.push('rm -rf 强制删除目录（谨慎使用）');
+            suggestions.push('rm -i 删除前询问确认');
+        } else if (command.startsWith('cp')) {
+            suggestions.push('cp -r 递归复制目录');
+            suggestions.push('cp -i 复制前询问确认');
+        } else if (command.startsWith('mv')) {
+            suggestions.push('mv -i 移动前询问确认');
+        } else if (command.startsWith('ps')) {
+            suggestions.push('ps aux 显示所有进程');
+            suggestions.push('ps ef 显示完整进程树');
+        } else if (command.startsWith('grep')) {
+            suggestions.push('grep -r 递归搜索文件内容');
+            suggestions.push('grep -i 忽略大小写搜索');
+            suggestions.push('grep -n 显示行号');
+        } else if (command.startsWith('find')) {
+            suggestions.push('find . -name 按名称查找文件');
+            suggestions.push('find . -type d 按类型查找（目录）');
+            suggestions.push('find . -type f 按类型查找（文件）');
+        } else if (command.startsWith('chmod')) {
+            suggestions.push('chmod 755 设置权限为 rwxr-xr-x');
+            suggestions.push('chmod +x 添加执行权限');
+        } else if (command.startsWith('chown')) {
+            suggestions.push('chown user:group 更改文件所有者和组');
+        } else if (command.startsWith('tar')) {
+            suggestions.push('tar -czf archive.tar.gz dir/ 创建gzip压缩包');
+            suggestions.push('tar -xzf archive.tar.gz 解压gzip压缩包');
+        } else if (command.startsWith('netstat')) {
+            suggestions.push('netstat -tuln 显示TCP/UDP监听端口');
+        } else if (command.startsWith('df')) {
+            suggestions.push('df -h 以人类可读格式显示磁盘空间');
+        } else if (command.startsWith('du')) {
+            suggestions.push('du -sh 显示目录总大小');
+            suggestions.push('du -h 以人类可读格式显示详细大小');
+        } else if (command.startsWith('top') || command.startsWith('htop')) {
+            suggestions.push('htop 更直观的系统监控工具（如已安装）');
+        } else {
+            // 通用命令建议
+            suggestions.push('man command 查看命令手册');
+            suggestions.push('command --help 查看命令帮助');
+            suggestions.push('which command 查找命令路径');
+        }
+        
+        return suggestions.join('\n');
+    }
 
     // 处理断开连接
     socket.on('disconnect', () => {
@@ -386,8 +609,33 @@ io.on('connection', (socket) => {
     });
 });
 
+// 添加健康检查端点
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'OK', 
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+    });
+});
+
+// 添加错误处理中间件
+app.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        if (error.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: '文件太大' });
+        }
+        if (error.code === 'LIMIT_UNEXPECTED_FILE') {
+            return res.status(400).json({ error: '意外的文件字段' });
+        }
+    }
+    console.error('应用错误:', error);
+    res.status(500).json({ error: '服务器内部错误' });
+});
+
 // 启动服务器
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`SSH客户端服务器运行在 http://localhost:${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, () => {
+    console.log(`SSH客户端服务器运行在 http://${HOST}:${PORT}`);
+    console.log(`访问 http://${HOST}:${PORT} 开始使用`);
 });

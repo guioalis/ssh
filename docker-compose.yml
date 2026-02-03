@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  ssh-client:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+      # 如果需要命令建议API，取消下面这行的注释并提供API密钥
+      # - COMMAND_SUGGESTION_API_KEY=your_api_key_here
+    volumes:
+      - ./uploads:/app/uploads
+      - ./downloads:/app/downloads
+      - ./.env:/app/.env
+    restart: unless-stopped
+    networks:
+      - ssh-network
+
+networks:
+  ssh-network:
+    driver: bridge
