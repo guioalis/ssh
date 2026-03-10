@@ -4,6 +4,7 @@ let term;
 let fitAddon;
 let currentPath = '/';
 let isConnected = false;
+let suggestionTimer;
 
 // 初始化函数
 document.addEventListener('DOMContentLoaded', () => {
@@ -43,9 +44,19 @@ function initTerminal() {
     fitAddon.fit();
 
     // 监听终端输入
-    term.onData(data => {
+    term.onData((data) => {
         if (isConnected) {
             socket.emit('terminal-input', data);
+        }
+
+        if ((data === ' ' || data === '\t') && isConnected) {
+            const currentLine = getCurrentCommand();
+            if (currentLine.trim().length > 0) {
+                clearTimeout(suggestionTimer);
+                suggestionTimer = setTimeout(() => {
+                    socket.emit('command-suggestion', currentLine.trim());
+                }, 200);
+            }
         }
     });
 
@@ -97,7 +108,7 @@ function initEventListeners() {
     document.getElementById('create-folder').addEventListener('click', () => {
         const folderName = prompt('请输入文件夹名称:');
         if (folderName) {
-            createDirectory(currentPath + '/' + folderName);
+            createDirectory(buildRemotePath(currentPath, folderName));
         }
     });
 
@@ -113,16 +124,14 @@ function initEventListeners() {
         saveFile(filePath, content);
     });
 
-    // 终端输入命令提示
-    term.onData((data) => {
-        // 当用户输入空格或Tab键时，获取当前命令并请求提示
-        if (data === ' ' || data === '\t') {
-            const currentLine = getCurrentCommand();
-            if (currentLine.trim().length > 0) {
-                socket.emit('command-suggestion', currentLine.trim());
-            }
-        }
-    });
+}
+
+function buildRemotePath(basePath, name) {
+    if (basePath === '/') {
+        return `/${name}`;
+    }
+
+    return `${basePath.replace(/\/+$/, '')}/${name}`;
 }
 
 // 初始化Socket事件处理
@@ -286,10 +295,20 @@ function showNotification(title, message, type) {
     // 创建通知元素
     const notification = document.createElement('div');
     notification.className = `alert alert-${type} notification`;
-    notification.innerHTML = `
-        <strong>${title}:</strong> ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    `;
+    const titleElement = document.createElement('strong');
+    titleElement.textContent = `${title}: `;
+
+    const messageNode = document.createTextNode(message);
+
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'btn-close';
+    closeButton.setAttribute('data-bs-dismiss', 'alert');
+    closeButton.setAttribute('aria-label', 'Close');
+
+    notification.appendChild(titleElement);
+    notification.appendChild(messageNode);
+    notification.appendChild(closeButton);
     
     // 添加到页面
     document.body.appendChild(notification);
@@ -371,7 +390,7 @@ function displayFileList(path, files) {
         if (isDirectory) {
             row.addEventListener('click', (e) => {
                 if (!e.target.closest('.btn')) {
-                    listFiles(path + '/' + file.filename);
+                    listFiles(buildRemotePath(path, file.filename));
                 }
             });
         }
@@ -380,7 +399,7 @@ function displayFileList(path, files) {
         const downloadBtn = row.querySelector('.download-btn');
         if (downloadBtn) {
             downloadBtn.addEventListener('click', () => {
-                downloadFile(path + '/' + file.filename);
+                downloadFile(buildRemotePath(path, file.filename));
             });
         }
         
@@ -388,7 +407,7 @@ function displayFileList(path, files) {
         const editBtn = row.querySelector('.edit-btn');
         if (editBtn) {
             editBtn.addEventListener('click', () => {
-                readFile(path + '/' + file.filename);
+                readFile(buildRemotePath(path, file.filename));
             });
         }
         
@@ -397,7 +416,7 @@ function displayFileList(path, files) {
         if (deleteBtn) {
             deleteBtn.addEventListener('click', () => {
                 if (confirm(`确定要删除 ${file.filename} 吗？`)) {
-                    deleteFile(path + '/' + file.filename);
+                    deleteFile(buildRemotePath(path, file.filename));
                 }
             });
         }

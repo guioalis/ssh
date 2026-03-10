@@ -171,18 +171,13 @@ io.on('connection', (socket) => {
             if (data.authType === 'password') {
                 config.password = data.password;
             } else if (data.authType === 'privateKey') {
-                // 如果提供了私钥文件路径
-                if (data.privateKeyPath) {
-                    try {
-                        config.privateKey = fs.readFileSync(data.privateKeyPath);
-                        if (data.passphrase) {
-                            config.passphrase = data.passphrase;
-                        }
-                    } catch (err) {
-                        return socket.emit('ssh-error', `无法读取私钥文件: ${err.message}`);
-                    }
-                } else {
-                    return socket.emit('ssh-error', '未提供私钥文件');
+                if (!data.privateKey || typeof data.privateKey !== 'string') {
+                    return socket.emit('ssh-error', '未提供有效的私钥内容');
+                }
+
+                config.privateKey = data.privateKey;
+                if (data.passphrase) {
+                    config.passphrase = data.passphrase;
                 }
             }
 
@@ -334,7 +329,7 @@ io.on('connection', (socket) => {
         const socketId = req.body.socketId;
         const remotePath = req.body.remotePath;
         
-        if (!socketId || !sshConnections[socketId] || !remotePath) {
+        if (!socketId || !sshConnections[socketId] || !remotePath || !validateFilePath(remotePath)) {
             return res.status(400).json({ error: '无效的请求参数' });
         }
 
@@ -345,13 +340,13 @@ io.on('connection', (socket) => {
                 return res.status(500).json({ error: `SFTP错误: ${err.message}` });
             }
 
-            const remoteFilePath = path.join(remotePath, req.file.originalname);
+            const remoteFilePath = path.posix.join(remotePath, req.file.originalname);
             const localFilePath = req.file.path;
 
             sftp.fastPut(localFilePath, remoteFilePath, (err) => {
                 // 删除临时文件
-                fs.unlinkSync(localFilePath);
-                
+                fs.unlink(localFilePath, () => {});
+
                 if (err) {
                     return res.status(500).json({ error: `文件上传错误: ${err.message}` });
                 }
