@@ -51,6 +51,10 @@ const upload = multer({
 // 存储SSH连接
 const sshConnections = {};
 
+// 命令提示缓存，减少重复请求带来的延迟和API开销
+const suggestionCache = new Map();
+const SUGGESTION_CACHE_TTL_MS = 60 * 1000;
+
 // 验证SSH连接参数的函数
 function validateSSHParams(data) {
     const errors = [];
@@ -171,18 +175,14 @@ io.on('connection', (socket) => {
             if (data.authType === 'password') {
                 config.password = data.password;
             } else if (data.authType === 'privateKey') {
-                // 如果提供了私钥文件路径
-                if (data.privateKeyPath) {
-                    try {
-                        config.privateKey = fs.readFileSync(data.privateKeyPath);
-                        if (data.passphrase) {
-                            config.passphrase = data.passphrase;
-                        }
-                    } catch (err) {
-                        return socket.emit('ssh-error', `无法读取私钥文件: ${err.message}`);
+                // 前端直接上传私钥内容
+                if (typeof data.privateKey === 'string' && data.privateKey.trim()) {
+                    config.privateKey = data.privateKey;
+                    if (data.passphrase) {
+                        config.passphrase = data.passphrase;
                     }
                 } else {
-                    return socket.emit('ssh-error', '未提供私钥文件');
+                    return socket.emit('ssh-error', '未提供有效的私钥内容');
                 }
             }
 
@@ -494,11 +494,22 @@ io.on('connection', (socket) => {
                 return socket.emit('command-suggestions', '无效的命令输入');
             }
 
+            const normalizedCommand = command.trim().toLowerCase();
+            const cached = suggestionCache.get(normalizedCommand);
+            if (cached && Date.now() - cached.timestamp < SUGGESTION_CACHE_TTL_MS) {
+                return socket.emit('command-suggestions', cached.value);
+            }
+
             // 检查是否配置了API密钥
             const apiKey = process.env.COMMAND_SUGGESTION_API_KEY;
             if (!apiKey) {
                 // 如果没有配置API密钥，则返回通用命令提示
-                return socket.emit('command-suggestions', generateLocalCommandSuggestions(command));
+                const localSuggestions = generateLocalCommandSuggestions(command);
+                suggestionCache.set(normalizedCommand, {
+                    value: localSuggestions,
+                    timestamp: Date.now()
+                });
+                return socket.emit('command-suggestions', localSuggestions);
             }
 
             const response = await axios.post('https://api.x.ai/v1/chat/completions', {
@@ -523,6 +534,10 @@ io.on('connection', (socket) => {
             });
 
             const suggestions = response.data.choices[0].message.content;
+            suggestionCache.set(normalizedCommand, {
+                value: suggestions,
+                timestamp: Date.now()
+            });
             socket.emit('command-suggestions', suggestions);
         } catch (error) {
             console.error('命令提示API错误:', error);

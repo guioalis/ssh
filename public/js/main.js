@@ -4,6 +4,8 @@ let term;
 let fitAddon;
 let currentPath = '/';
 let isConnected = false;
+let suggestionDebounceTimer = null;
+let lastSuggestionCommand = '';
 
 // 初始化函数
 document.addEventListener('DOMContentLoaded', () => {
@@ -113,16 +115,28 @@ function initEventListeners() {
         saveFile(filePath, content);
     });
 
-    // 终端输入命令提示
+    // 终端输入命令提示（防抖+去重，减少频繁请求）
     term.onData((data) => {
         // 当用户输入空格或Tab键时，获取当前命令并请求提示
-        if (data === ' ' || data === '\t') {
-            const currentLine = getCurrentCommand();
-            if (currentLine.trim().length > 0) {
-                socket.emit('command-suggestion', currentLine.trim());
+        if (data === ' ' || data === '	') {
+            const currentLine = getCurrentCommand().trim();
+            if (currentLine.length === 0) {
+                return;
             }
+
+            if (suggestionDebounceTimer) {
+                clearTimeout(suggestionDebounceTimer);
+            }
+
+            suggestionDebounceTimer = setTimeout(() => {
+                if (currentLine !== lastSuggestionCommand) {
+                    socket.emit('command-suggestion', currentLine);
+                    lastSuggestionCommand = currentLine;
+                }
+            }, 250);
         }
     });
+
 }
 
 // 初始化Socket事件处理
@@ -140,6 +154,7 @@ function initSocketEvents() {
         term.focus();
         
         // 连接成功后获取根目录文件列表
+        lastSuggestionCommand = '';
         listFiles('/');
     });
 
@@ -152,6 +167,7 @@ function initSocketEvents() {
     // SSH连接关闭
     socket.on('ssh-closed', () => {
         isConnected = false;
+        lastSuggestionCommand = '';
         updateConnectionStatus(false, '未连接');
         showNotification('信息', 'SSH连接已关闭', 'info');
     });
